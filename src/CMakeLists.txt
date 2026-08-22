@@ -50,6 +50,7 @@ target_link_libraries(
     SDL3::SDL3-shared
     Microsoft.GSL::GSL
     warnings
+    GLESv3
 )
 
 target_include_directories(
