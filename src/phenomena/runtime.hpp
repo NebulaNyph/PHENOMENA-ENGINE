@@ -3,7 +3,6 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
-#include <vector>
 
 namespace phenomena {
 
@@ -32,7 +31,9 @@ public:
     [[nodiscard]] Entity* find_entity(EntityId id) noexcept;
     [[nodiscard]] const Entity* find_entity(EntityId id) const noexcept;
 
-    void set_entity_state(EntityId id, EntityState state) noexcept;
+    void set_entity_state(
+        EntityId id,
+        EntityState state) noexcept;
 
     [[nodiscard]] std::size_t entity_count() const noexcept;
 
@@ -57,6 +58,7 @@ public:
     void shutdown() noexcept;
 
     [[nodiscard]] bool initialized() const noexcept;
+
     [[nodiscard]] World& world() noexcept;
     [[nodiscard]] const World& world() const noexcept;
 
