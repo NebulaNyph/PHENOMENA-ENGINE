@@ -23,6 +23,8 @@ if(NOT TARGET SDL3::SDL3-shared)
     return()
 endif()
 
+find_package(tinygltf CONFIG REQUIRED)
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Android")
     add_library(
         sdl_app
@@ -51,6 +53,7 @@ target_link_libraries(
     Microsoft.GSL::GSL
     warnings
     GLESv3
+    tinygltf::tinygltf
 )
 
 target_include_directories(
