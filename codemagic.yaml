@@ -1,0 +1,18 @@
+workflows:
+  phenomеna_android:
+    name: PHENOMENA Android ARM64
+    max_build_duration: 60
+
+    environment:
+      vars:
+        ANDROID_NDK_HOME: $ANDROID_NDK_HOME
+
+    scripts:
+      - name: Build PHENOMENA
+        script: |
+          cd android-project
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+    artifacts:
+      - android-project/app/build/outputs/apk/debug/*.apk
