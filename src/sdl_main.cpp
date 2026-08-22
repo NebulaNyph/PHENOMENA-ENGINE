@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <new>
 
 struct app_state final
 {
@@ -134,6 +135,7 @@ static GLuint compile_shader(GLenum type, const char* source)
 
     if (success != GL_TRUE) {
         char log[2048]{};
+
         glGetShaderInfoLog(
             shader,
             sizeof(log),
@@ -218,6 +220,7 @@ static GLuint create_program()
     glDeleteShader(fragment_shader);
 
     GLint success = GL_FALSE;
+
     glGetProgramiv(
         program,
         GL_LINK_STATUS,
@@ -247,43 +250,33 @@ static GLuint create_program()
 static bool create_cube(app_state& state)
 {
     constexpr float vertices[] = {
-        // Position              // Color
+        -1.0f, -1.0f,  1.0f,  1.0f, 0.0f, 0.0f,
+         1.0f, -1.0f,  1.0f,  0.0f, 1.0f, 0.0f,
+         1.0f,  1.0f,  1.0f,  0.0f, 0.0f, 1.0f,
+        -1.0f,  1.0f,  1.0f,  1.0f, 1.0f, 0.0f,
 
-        // Front
-        -1.0f, -1.0f,  1.0f,     1.0f, 0.0f, 0.0f,
-         1.0f, -1.0f,  1.0f,     0.0f, 1.0f, 0.0f,
-         1.0f,  1.0f,  1.0f,     0.0f, 0.0f, 1.0f,
-        -1.0f,  1.0f,  1.0f,     1.0f, 1.0f, 0.0f,
-
-        // Back
-        -1.0f, -1.0f, -1.0f,     1.0f, 0.0f, 1.0f,
-         1.0f, -1.0f, -1.0f,     0.0f, 1.0f, 1.0f,
-         1.0f,  1.0f, -1.0f,     1.0f, 1.0f, 1.0f,
-        -1.0f,  1.0f, -1.0f,     0.2f, 0.4f, 1.0f,
+        -1.0f, -1.0f, -1.0f,  1.0f, 0.0f, 1.0f,
+         1.0f, -1.0f, -1.0f,  0.0f, 1.0f, 1.0f,
+         1.0f,  1.0f, -1.0f,  1.0f, 1.0f, 1.0f,
+        -1.0f,  1.0f, -1.0f,  0.2f, 0.4f, 1.0f,
     };
 
     constexpr std::uint16_t indices[] = {
-        // Front
         0, 1, 2,
         2, 3, 0,
 
-        // Back
         5, 4, 7,
         7, 6, 5,
 
-        // Left
         4, 0, 3,
         3, 7, 4,
 
-        // Right
         1, 5, 6,
         6, 2, 1,
 
-        // Top
         3, 2, 6,
         6, 7, 3,
 
-        // Bottom
         4, 5, 1,
         1, 0, 4
     };
@@ -328,7 +321,8 @@ static bool create_cube(app_state& state)
         GL_FLOAT,
         GL_FALSE,
         6 * sizeof(float),
-        reinterpret_cast<void*>(3 * sizeof(float)));
+        reinterpret_cast<void*>(
+            3 * sizeof(float)));
 
     glEnableVertexAttribArray(1);
 
@@ -351,7 +345,6 @@ SDL_AppResult SDL_AppInit(
         return SDL_APP_FAILURE;
     }
 
-    // Request an OpenGL ES 3 context.
     SDL_GL_SetAttribute(
         SDL_GL_CONTEXT_PROFILE_MASK,
         SDL_GL_CONTEXT_PROFILE_ES);
@@ -470,7 +463,8 @@ SDL_AppResult SDL_AppInit(
 
     *appstate = state;
 
-    SDL_Log("PHENOMENA V3 renderer initialized.");
+    SDL_Log(
+        "PHENOMENA V3 renderer initialized.");
 
     return SDL_APP_CONTINUE;
 }
@@ -527,17 +521,17 @@ SDL_AppResult SDL_AppIterate(void* appstate)
             0.0f,
             -5.0f);
 
-    const mat4 rotation_y =
+    const mat4 y_rotation =
         rotation_y(state->rotation);
 
-    const mat4 rotation_x_matrix =
+    const mat4 x_rotation =
         rotation_x(
             state->rotation * 0.65f);
 
     const mat4 model =
         multiply(
-            rotation_y,
-            rotation_x_matrix);
+            y_rotation,
+            x_rotation);
 
     const mat4 view_model =
         multiply(
