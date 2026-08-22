@@ -1,0 +1,5 @@
+# Context is docker/ (see publish-docker.yml).
+# Keep the context to Dockerfiles only.
+*
+!fedora.Dockerfile
+!manjaro.Dockerfile
