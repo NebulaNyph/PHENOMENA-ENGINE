@@ -10,6 +10,7 @@ target_compile_features(phenomena
 target_link_libraries(phenomena
     PRIVATE
         SDL3::SDL3
+        glm::glm
 )
 
 target_include_directories(phenomena
@@ -24,9 +25,7 @@ if(ANDROID)
             android
             log
     )
-endif()
-
-if(NOT ANDROID)
+else()
     find_package(OpenGL REQUIRED)
 
     target_link_libraries(phenomena
