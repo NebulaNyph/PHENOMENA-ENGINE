@@ -1,151 +1,101 @@
-#define SDL_MAIN_USE_CALLBACKS 1
+#ifdef __ANDROID__
+#include <GLES3/gl3.h>
+#include <jni.h>
+#include <android/native_activity.h>
+#else
+#include <GL/gl.h>
+#endif
 
 #include <SDL3/SDL.h>
-#include <SDL3/SDL_main.h>
 
-#include <GLES3/gl3.h>
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
 
-#include <cmath>
-#include <cstdint>
-#include <cstdio>
-#include <cstdlib>
-#include <new>
+#define TINYGLTF_IMPLEMENTATION
+#define TINYGLTF_NO_STB_IMAGE
+#define TINYGLTF_NO_STB_IMAGE_WRITE
+#include <tiny_gltf.h>
 
-struct app_state final
-{
-    SDL_Window* window{ nullptr };
-    SDL_GLContext gl_context{ nullptr };
+#include <cstring>
+#include <iostream>
+#include <string>
+#include <vector>
 
-    GLuint program{ 0 };
-    GLuint vao{ 0 };
-    GLuint vbo{ 0 };
-    GLuint ebo{ 0 };
+const char* vertex_shader = R"(
+    #version 300 es
+    precision highp float;
 
-    GLint mvp_location{ -1 };
+    layout(location = 0) in vec3 position;
+    layout(location = 1) in vec3 normal;
 
-    float rotation{ 0.0f };
-};
+    uniform mat4 projection;
+    uniform mat4 view;
+    uniform mat4 model;
 
-struct mat4 final
-{
-    float m[16]{};
-};
+    out vec3 v_normal;
 
-static mat4 identity_matrix()
-{
-    mat4 result{};
-
-    result.m[0] = 1.0f;
-    result.m[5] = 1.0f;
-    result.m[10] = 1.0f;
-    result.m[15] = 1.0f;
-
-    return result;
-}
-
-static mat4 multiply(const mat4& a, const mat4& b)
-{
-    mat4 result{};
-
-    for (int column = 0; column < 4; ++column) {
-        for (int row = 0; row < 4; ++row) {
-            result.m[column * 4 + row] =
-                a.m[0 * 4 + row] * b.m[column * 4 + 0] +
-                a.m[1 * 4 + row] * b.m[column * 4 + 1] +
-                a.m[2 * 4 + row] * b.m[column * 4 + 2] +
-                a.m[3 * 4 + row] * b.m[column * 4 + 3];
-        }
+    void main()
+    {
+        gl_Position = projection * view * model * vec4(position, 1.0);
+        v_normal = normalize(mat3(model) * normal);
     }
+)";
 
-    return result;
-}
+const char* fragment_shader = R"(
+    #version 300 es
+    precision highp float;
 
-static mat4 perspective(
-    float fov_y,
-    float aspect,
-    float near_plane,
-    float far_plane)
+    in vec3 v_normal;
+    out vec4 fragColor;
+
+    void main()
+    {
+        vec3 light = normalize(vec3(1.0, 1.0, 1.0));
+        float diff = max(dot(v_normal, light), 0.3);
+        fragColor = vec4(vec3(0.8) * diff, 1.0);
+    }
+)";
+
+struct Mesh
 {
-    mat4 result{};
+    GLuint vao{0};
+    GLuint vbo{0};
+    GLuint ebo{0};
+    uint32_t index_count{0};
+};
 
-    const float f = 1.0f / std::tan(fov_y * 0.5f);
-
-    result.m[0] = f / aspect;
-    result.m[5] = f;
-    result.m[10] =
-        (far_plane + near_plane) / (near_plane - far_plane);
-    result.m[11] = -1.0f;
-    result.m[14] =
-        (2.0f * far_plane * near_plane) /
-        (near_plane - far_plane);
-
-    return result;
-}
-
-static mat4 translation(float x, float y, float z)
+struct Camera
 {
-    mat4 result = identity_matrix();
+    glm::vec3 position{0.0f, 0.0f, 5.0f};
+    glm::vec3 target{0.0f, 0.0f, 0.0f};
+    glm::vec3 up{0.0f, 1.0f, 0.0f};
+};
 
-    result.m[12] = x;
-    result.m[13] = y;
-    result.m[14] = z;
-
-    return result;
-}
-
-static mat4 rotation_x(float angle)
+GLuint compile_shader(const char* source, GLenum type)
 {
-    mat4 result = identity_matrix();
-
-    const float c = std::cos(angle);
-    const float s = std::sin(angle);
-
-    result.m[5] = c;
-    result.m[6] = s;
-    result.m[9] = -s;
-    result.m[10] = c;
-
-    return result;
-}
-
-static mat4 rotation_y(float angle)
-{
-    mat4 result = identity_matrix();
-
-    const float c = std::cos(angle);
-    const float s = std::sin(angle);
-
-    result.m[0] = c;
-    result.m[2] = -s;
-    result.m[8] = s;
-    result.m[10] = c;
-
-    return result;
-}
-
-static GLuint compile_shader(GLenum type, const char* source)
-{
-    const GLuint shader = glCreateShader(type);
+    GLuint shader = glCreateShader(type);
 
     glShaderSource(shader, 1, &source, nullptr);
     glCompileShader(shader);
 
-    GLint success = GL_FALSE;
+    GLint success = 0;
     glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
 
-    if (success != GL_TRUE) {
-        char log[2048]{};
-
+    if (!success)
+    {
+        GLchar info_log[1024]{};
         glGetShaderInfoLog(
             shader,
-            sizeof(log),
+            sizeof(info_log),
             nullptr,
-            log);
+            info_log
+        );
 
-        SDL_LogError(
-            SDL_LOG_CATEGORY_APPLICATION,
-            "Shader compilation failed:\n%s",
-            log);
+        std::cerr
+            << "Shader compilation failed: "
+            << info_log
+            << std::endl;
 
         glDeleteShader(shader);
         return 0;
@@ -154,156 +104,328 @@ static GLuint compile_shader(GLenum type, const char* source)
     return shader;
 }
 
-static GLuint create_program()
+GLuint create_program()
 {
-    constexpr const char* vertex_shader_source = R"(
-        #version 300 es
+    GLuint vertex = compile_shader(
+        vertex_shader,
+        GL_VERTEX_SHADER
+    );
 
-        precision highp float;
+    GLuint fragment = compile_shader(
+        fragment_shader,
+        GL_FRAGMENT_SHADER
+    );
 
-        layout(location = 0) in vec3 a_position;
-        layout(location = 1) in vec3 a_color;
-
-        uniform mat4 u_mvp;
-
-        out vec3 v_color;
-
-        void main()
-        {
-            gl_Position = u_mvp * vec4(a_position, 1.0);
-            v_color = a_color;
-        }
-    )";
-
-    constexpr const char* fragment_shader_source = R"(
-        #version 300 es
-
-        precision highp float;
-
-        in vec3 v_color;
-
-        out vec4 out_color;
-
-        void main()
-        {
-            out_color = vec4(v_color, 1.0);
-        }
-    )";
-
-    const GLuint vertex_shader =
-        compile_shader(
-            GL_VERTEX_SHADER,
-            vertex_shader_source);
-
-    if (vertex_shader == 0) {
+    if (vertex == 0 || fragment == 0)
+    {
         return 0;
     }
 
-    const GLuint fragment_shader =
-        compile_shader(
-            GL_FRAGMENT_SHADER,
-            fragment_shader_source);
+    GLuint program = glCreateProgram();
 
-    if (fragment_shader == 0) {
-        glDeleteShader(vertex_shader);
-        return 0;
-    }
-
-    const GLuint program = glCreateProgram();
-
-    glAttachShader(program, vertex_shader);
-    glAttachShader(program, fragment_shader);
-
+    glAttachShader(program, vertex);
+    glAttachShader(program, fragment);
     glLinkProgram(program);
 
-    glDeleteShader(vertex_shader);
-    glDeleteShader(fragment_shader);
+    GLint success = 0;
+    glGetProgramiv(program, GL_LINK_STATUS, &success);
 
-    GLint success = GL_FALSE;
-
-    glGetProgramiv(
-        program,
-        GL_LINK_STATUS,
-        &success);
-
-    if (success != GL_TRUE) {
-        char log[2048]{};
+    if (!success)
+    {
+        GLchar info_log[1024]{};
 
         glGetProgramInfoLog(
             program,
-            sizeof(log),
+            sizeof(info_log),
             nullptr,
-            log);
+            info_log
+        );
 
-        SDL_LogError(
-            SDL_LOG_CATEGORY_APPLICATION,
-            "Program linking failed:\n%s",
-            log);
+        std::cerr
+            << "Program linking failed: "
+            << info_log
+            << std::endl;
 
         glDeleteProgram(program);
-        return 0;
+        program = 0;
     }
+
+    glDeleteShader(vertex);
+    glDeleteShader(fragment);
 
     return program;
 }
 
-static bool create_cube(app_state& state)
+Mesh load_gltf_mesh(const std::string& filepath)
 {
-    constexpr float vertices[] = {
-        -1.0f, -1.0f,  1.0f,  1.0f, 0.0f, 0.0f,
-         1.0f, -1.0f,  1.0f,  0.0f, 1.0f, 0.0f,
-         1.0f,  1.0f,  1.0f,  0.0f, 0.0f, 1.0f,
-        -1.0f,  1.0f,  1.0f,  1.0f, 1.0f, 0.0f,
+    Mesh mesh;
 
-        -1.0f, -1.0f, -1.0f,  1.0f, 0.0f, 1.0f,
-         1.0f, -1.0f, -1.0f,  0.0f, 1.0f, 1.0f,
-         1.0f,  1.0f, -1.0f,  1.0f, 1.0f, 1.0f,
-        -1.0f,  1.0f, -1.0f,  0.2f, 0.4f, 1.0f,
-    };
+    tinygltf::Model model;
+    tinygltf::TinyGLTF loader;
 
-    constexpr std::uint16_t indices[] = {
-        0, 1, 2,
-        2, 3, 0,
+    std::string error;
+    std::string warning;
 
-        5, 4, 7,
-        7, 6, 5,
+    bool success = false;
 
-        4, 0, 3,
-        3, 7, 4,
+    if (filepath.size() >= 4 &&
+        filepath.substr(filepath.size() - 4) == ".glb")
+    {
+        success = loader.LoadBinaryFromFile(
+            &model,
+            &error,
+            &warning,
+            filepath
+        );
+    }
+    else
+    {
+        success = loader.LoadASCIIFromFile(
+            &model,
+            &error,
+            &warning,
+            filepath
+        );
+    }
 
-        1, 5, 6,
-        6, 2, 1,
+    if (!warning.empty())
+    {
+        std::cerr
+            << "glTF warning: "
+            << warning
+            << std::endl;
+    }
 
-        3, 2, 6,
-        6, 7, 3,
+    if (!success)
+    {
+        std::cerr
+            << "Failed to load model: "
+            << error
+            << std::endl;
 
-        4, 5, 1,
-        1, 0, 4
-    };
+        return mesh;
+    }
 
-    glGenVertexArrays(1, &state.vao);
-    glGenBuffers(1, &state.vbo);
-    glGenBuffers(1, &state.ebo);
+    if (model.meshes.empty())
+    {
+        std::cerr
+            << "Model contains no meshes."
+            << std::endl;
 
-    glBindVertexArray(state.vao);
+        return mesh;
+    }
 
-    glBindBuffer(GL_ARRAY_BUFFER, state.vbo);
+    const auto& gltf_mesh = model.meshes[0];
+
+    if (gltf_mesh.primitives.empty())
+    {
+        std::cerr
+            << "Mesh contains no primitives."
+            << std::endl;
+
+        return mesh;
+    }
+
+    const auto& primitive = gltf_mesh.primitives[0];
+
+    auto position_attribute =
+        primitive.attributes.find("POSITION");
+
+    if (position_attribute == primitive.attributes.end())
+    {
+        std::cerr
+            << "Mesh has no POSITION attribute."
+            << std::endl;
+
+        return mesh;
+    }
+
+    const auto& position_accessor =
+        model.accessors[position_attribute->second];
+
+    const auto& position_view =
+        model.bufferViews[position_accessor.bufferView];
+
+    const auto& position_buffer =
+        model.buffers[position_view.buffer];
+
+    const size_t position_offset =
+        position_view.byteOffset +
+        position_accessor.byteOffset;
+
+    const float* position_data =
+        reinterpret_cast<const float*>(
+            position_buffer.data.data() +
+            position_offset
+        );
+
+    std::vector<float> positions(
+        position_data,
+        position_data +
+            position_accessor.count * 3
+    );
+
+    std::vector<float> normals(
+        positions.size(),
+        0.0f
+    );
+
+    auto normal_attribute =
+        primitive.attributes.find("NORMAL");
+
+    if (normal_attribute != primitive.attributes.end())
+    {
+        const auto& normal_accessor =
+            model.accessors[normal_attribute->second];
+
+        const auto& normal_view =
+            model.bufferViews[normal_accessor.bufferView];
+
+        const auto& normal_buffer =
+            model.buffers[normal_view.buffer];
+
+        const size_t normal_offset =
+            normal_view.byteOffset +
+            normal_accessor.byteOffset;
+
+        const float* normal_data =
+            reinterpret_cast<const float*>(
+                normal_buffer.data.data() +
+                normal_offset
+            );
+
+        normals.assign(
+            normal_data,
+            normal_data +
+                normal_accessor.count * 3
+        );
+    }
+    else
+    {
+        for (size_t i = 0; i + 8 < positions.size(); i += 9)
+        {
+            glm::vec3 a(
+                positions[i + 3] - positions[i],
+                positions[i + 4] - positions[i + 1],
+                positions[i + 5] - positions[i + 2]
+            );
+
+            glm::vec3 b(
+                positions[i + 6] - positions[i],
+                positions[i + 7] - positions[i + 1],
+                positions[i + 8] - positions[i + 2]
+            );
+
+            glm::vec3 normal =
+                glm::normalize(glm::cross(a, b));
+
+            for (int j = 0; j < 3; ++j)
+            {
+                normals[i + j * 3 + 0] = normal.x;
+                normals[i + j * 3 + 1] = normal.y;
+                normals[i + j * 3 + 2] = normal.z;
+            }
+        }
+    }
+
+    std::vector<uint32_t> indices;
+
+    if (primitive.indices >= 0)
+    {
+        const auto& index_accessor =
+            model.accessors[primitive.indices];
+
+        const auto& index_view =
+            model.bufferViews[index_accessor.bufferView];
+
+        const auto& index_buffer =
+            model.buffers[index_view.buffer];
+
+        const size_t index_offset =
+            index_view.byteOffset +
+            index_accessor.byteOffset;
+
+        const unsigned char* data =
+            index_buffer.data.data() +
+            index_offset;
+
+        for (size_t i = 0;
+             i < index_accessor.count;
+             ++i)
+        {
+            switch (index_accessor.componentType)
+            {
+                case TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE:
+                    indices.push_back(
+                        reinterpret_cast<const uint8_t*>(data)[i]
+                    );
+                    break;
+
+                case TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT:
+                    indices.push_back(
+                        reinterpret_cast<const uint16_t*>(data)[i]
+                    );
+                    break;
+
+                case TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT:
+                    indices.push_back(
+                        reinterpret_cast<const uint32_t*>(data)[i]
+                    );
+                    break;
+
+                default:
+                    std::cerr
+                        << "Unsupported index type."
+                        << std::endl;
+
+                    return mesh;
+            }
+        }
+    }
+    else
+    {
+        for (uint32_t i = 0;
+             i < positions.size() / 3;
+             ++i)
+        {
+            indices.push_back(i);
+        }
+    }
+
+    std::vector<float> vertex_data;
+
+    vertex_data.reserve(
+        (positions.size() / 3) * 6
+    );
+
+    for (size_t i = 0; i < positions.size(); i += 3)
+    {
+        vertex_data.push_back(positions[i + 0]);
+        vertex_data.push_back(positions[i + 1]);
+        vertex_data.push_back(positions[i + 2]);
+
+        vertex_data.push_back(normals[i + 0]);
+        vertex_data.push_back(normals[i + 1]);
+        vertex_data.push_back(normals[i + 2]);
+    }
+
+    mesh.index_count =
+        static_cast<uint32_t>(indices.size());
+
+    glGenVertexArrays(1, &mesh.vao);
+    glBindVertexArray(mesh.vao);
+
+    glGenBuffers(1, &mesh.vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, mesh.vbo);
 
     glBufferData(
         GL_ARRAY_BUFFER,
-        sizeof(vertices),
-        vertices,
-        GL_STATIC_DRAW);
-
-    glBindBuffer(
-        GL_ELEMENT_ARRAY_BUFFER,
-        state.ebo);
-
-    glBufferData(
-        GL_ELEMENT_ARRAY_BUFFER,
-        sizeof(indices),
-        indices,
-        GL_STATIC_DRAW);
+        static_cast<GLsizeiptr>(
+            vertex_data.size() * sizeof(float)
+        ),
+        vertex_data.data(),
+        GL_STATIC_DRAW
+    );
 
     glVertexAttribPointer(
         0,
@@ -311,7 +433,8 @@ static bool create_cube(app_state& state)
         GL_FLOAT,
         GL_FALSE,
         6 * sizeof(float),
-        nullptr);
+        nullptr
+    );
 
     glEnableVertexAttribArray(0);
 
@@ -322,299 +445,288 @@ static bool create_cube(app_state& state)
         GL_FALSE,
         6 * sizeof(float),
         reinterpret_cast<void*>(
-            3 * sizeof(float)));
+            3 * sizeof(float)
+        )
+    );
 
     glEnableVertexAttribArray(1);
 
+    glGenBuffers(1, &mesh.ebo);
+    glBindBuffer(
+        GL_ELEMENT_ARRAY_BUFFER,
+        mesh.ebo
+    );
+
+    glBufferData(
+        GL_ELEMENT_ARRAY_BUFFER,
+        static_cast<GLsizeiptr>(
+            indices.size() * sizeof(uint32_t)
+        ),
+        indices.data(),
+        GL_STATIC_DRAW
+    );
+
     glBindVertexArray(0);
 
-    return true;
+    std::cout
+        << "Loaded mesh: "
+        << positions.size() / 3
+        << " vertices, "
+        << indices.size()
+        << " indices"
+        << std::endl;
+
+    return mesh;
 }
 
-SDL_AppResult SDL_AppInit(
-    void** appstate,
-    [[maybe_unused]] int argc,
-    [[maybe_unused]] char* argv[])
+int main()
 {
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
-        SDL_LogError(
-            SDL_LOG_CATEGORY_APPLICATION,
-            "SDL_Init failed: %s",
-            SDL_GetError());
+    if (!SDL_Init(SDL_INIT_VIDEO))
+    {
+        std::cerr
+            << "SDL initialization failed: "
+            << SDL_GetError()
+            << std::endl;
 
-        return SDL_APP_FAILURE;
+        return 1;
     }
 
+#ifdef __ANDROID__
     SDL_GL_SetAttribute(
         SDL_GL_CONTEXT_PROFILE_MASK,
-        SDL_GL_CONTEXT_PROFILE_ES);
+        SDL_GL_CONTEXT_PROFILE_ES
+    );
 
     SDL_GL_SetAttribute(
         SDL_GL_CONTEXT_MAJOR_VERSION,
-        3);
+        3
+    );
 
     SDL_GL_SetAttribute(
         SDL_GL_CONTEXT_MINOR_VERSION,
-        0);
+        0
+    );
+#else
+    SDL_GL_SetAttribute(
+        SDL_GL_CONTEXT_PROFILE_MASK,
+        SDL_GL_CONTEXT_PROFILE_CORE
+    );
 
     SDL_GL_SetAttribute(
-        SDL_GL_DOUBLEBUFFER,
-        1);
+        SDL_GL_CONTEXT_MAJOR_VERSION,
+        3
+    );
 
     SDL_GL_SetAttribute(
-        SDL_GL_DEPTH_SIZE,
-        24);
+        SDL_GL_CONTEXT_MINOR_VERSION,
+        3
+    );
+#endif
 
-    auto* state = new (std::nothrow) app_state{};
+    SDL_Window* window =
+        SDL_CreateWindow(
+            "PHENOMENA",
+            800,
+            600,
+            SDL_WINDOW_OPENGL |
+            SDL_WINDOW_RESIZABLE
+        );
 
-    if (!state) {
-        SDL_LogError(
-            SDL_LOG_CATEGORY_APPLICATION,
-            "Failed to allocate application state");
+    if (!window)
+    {
+        std::cerr
+            << "Failed to create window: "
+            << SDL_GetError()
+            << std::endl;
 
-        return SDL_APP_FAILURE;
+        SDL_Quit();
+        return 1;
     }
 
-    state->window = SDL_CreateWindow(
-        "PHENOMENA V3",
-        1280,
-        720,
-        SDL_WINDOW_OPENGL |
-        SDL_WINDOW_RESIZABLE);
+    SDL_GLContext context =
+        SDL_GL_CreateContext(window);
 
-    if (!state->window) {
-        SDL_LogError(
-            SDL_LOG_CATEGORY_APPLICATION,
-            "SDL_CreateWindow failed: %s",
-            SDL_GetError());
+    if (!context)
+    {
+        std::cerr
+            << "Failed to create OpenGL context: "
+            << SDL_GetError()
+            << std::endl;
 
-        delete state;
-        return SDL_APP_FAILURE;
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+
+        return 1;
     }
 
-    state->gl_context =
-        SDL_GL_CreateContext(state->window);
-
-    if (!state->gl_context) {
-        SDL_LogError(
-            SDL_LOG_CATEGORY_APPLICATION,
-            "SDL_GL_CreateContext failed: %s",
-            SDL_GetError());
-
-        SDL_DestroyWindow(state->window);
-        delete state;
-
-        return SDL_APP_FAILURE;
-    }
-
-    if (!SDL_GL_MakeCurrent(
-            state->window,
-            state->gl_context)) {
-
-        SDL_LogError(
-            SDL_LOG_CATEGORY_APPLICATION,
-            "SDL_GL_MakeCurrent failed: %s",
-            SDL_GetError());
-
-        return SDL_APP_FAILURE;
-    }
-
-    SDL_Log(
-        "OpenGL Vendor: %s",
-        reinterpret_cast<const char*>(
-            glGetString(GL_VENDOR)));
-
-    SDL_Log(
-        "OpenGL Renderer: %s",
-        reinterpret_cast<const char*>(
-            glGetString(GL_RENDERER)));
-
-    SDL_Log(
-        "OpenGL Version: %s",
-        reinterpret_cast<const char*>(
-            glGetString(GL_VERSION)));
-
-    SDL_Log(
-        "GLSL Version: %s",
-        reinterpret_cast<const char*>(
-            glGetString(GL_SHADING_LANGUAGE_VERSION)));
-
-    state->program = create_program();
-
-    if (state->program == 0) {
-        return SDL_APP_FAILURE;
-    }
-
-    state->mvp_location =
-        glGetUniformLocation(
-            state->program,
-            "u_mvp");
-
-    if (!create_cube(*state)) {
-        return SDL_APP_FAILURE;
-    }
+    SDL_GL_MakeCurrent(window, context);
+    SDL_GL_SetSwapInterval(1);
 
     glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LESS);
-
-    glEnable(GL_CULL_FACE);
-    glCullFace(GL_BACK);
-    glFrontFace(GL_CCW);
-
-    *appstate = state;
-
-    SDL_Log(
-        "PHENOMENA V3 renderer initialized.");
-
-    return SDL_APP_CONTINUE;
-}
-
-SDL_AppResult SDL_AppIterate(void* appstate)
-{
-    auto* state =
-        static_cast<app_state*>(appstate);
-
-    int width = 1;
-    int height = 1;
-
-    SDL_GetWindowSizeInPixels(
-        state->window,
-        &width,
-        &height);
-
-    if (height <= 0) {
-        height = 1;
-    }
-
-    glViewport(
-        0,
-        0,
-        width,
-        height);
 
     glClearColor(
-        0.025f,
-        0.035f,
-        0.055f,
-        1.0f);
+        0.1f,
+        0.1f,
+        0.15f,
+        1.0f
+    );
 
-    glClear(
-        GL_COLOR_BUFFER_BIT |
-        GL_DEPTH_BUFFER_BIT);
+    GLuint program = create_program();
 
-    state->rotation += 0.01f;
+    if (program == 0)
+    {
+        SDL_GL_DestroyContext(context);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
 
-    const float aspect =
-        static_cast<float>(width) /
-        static_cast<float>(height);
-
-    const mat4 projection =
-        perspective(
-            1.0471976f,
-            aspect,
-            0.1f,
-            100.0f);
-
-    const mat4 view =
-        translation(
-            0.0f,
-            0.0f,
-            -5.0f);
-
-    const mat4 y_rotation =
-        rotation_y(state->rotation);
-
-    const mat4 x_rotation =
-        rotation_x(
-            state->rotation * 0.65f);
-
-    const mat4 model =
-        multiply(
-            y_rotation,
-            x_rotation);
-
-    const mat4 view_model =
-        multiply(
-            view,
-            model);
-
-    const mat4 mvp =
-        multiply(
-            projection,
-            view_model);
-
-    glUseProgram(state->program);
-
-    glUniformMatrix4fv(
-        state->mvp_location,
-        1,
-        GL_FALSE,
-        mvp.m);
-
-    glBindVertexArray(state->vao);
-
-    glDrawElements(
-        GL_TRIANGLES,
-        36,
-        GL_UNSIGNED_SHORT,
-        nullptr);
-
-    glBindVertexArray(0);
-
-    SDL_GL_SwapWindow(state->window);
-
-    return SDL_APP_CONTINUE;
-}
-
-SDL_AppResult SDL_AppEvent(
-    void* /*appstate*/,
-    SDL_Event* event)
-{
-    if (event->type == SDL_EVENT_QUIT) {
-        return SDL_APP_SUCCESS;
+        return 1;
     }
 
-    return SDL_APP_CONTINUE;
-}
+    Camera camera;
 
-void SDL_AppQuit(
-    void* appstate,
-    [[maybe_unused]] SDL_AppResult result)
-{
-    auto* state =
-        static_cast<app_state*>(appstate);
+    Mesh mesh =
+        load_gltf_mesh("model.glb");
 
-    if (!state) {
-        return;
+    bool running = true;
+
+    while (running)
+    {
+        SDL_Event event;
+
+        while (SDL_PollEvent(&event))
+        {
+            if (event.type == SDL_EVENT_QUIT)
+            {
+                running = false;
+            }
+        }
+
+        int width = 800;
+        int height = 600;
+
+        SDL_GetWindowSize(
+            window,
+            &width,
+            &height
+        );
+
+        if (height == 0)
+        {
+            height = 1;
+        }
+
+        glViewport(
+            0,
+            0,
+            width,
+            height
+        );
+
+        glClear(
+            GL_COLOR_BUFFER_BIT |
+            GL_DEPTH_BUFFER_BIT
+        );
+
+        glUseProgram(program);
+
+        glm::mat4 projection =
+            glm::perspective(
+                glm::radians(45.0f),
+                static_cast<float>(width) /
+                    static_cast<float>(height),
+                0.1f,
+                100.0f
+            );
+
+        glm::mat4 view =
+            glm::lookAt(
+                camera.position,
+                camera.target,
+                camera.up
+            );
+
+        glm::mat4 model =
+            glm::mat4(1.0f);
+
+        glUniformMatrix4fv(
+            glGetUniformLocation(
+                program,
+                "projection"
+            ),
+            1,
+            GL_FALSE,
+            glm::value_ptr(projection)
+        );
+
+        glUniformMatrix4fv(
+            glGetUniformLocation(
+                program,
+                "view"
+            ),
+            1,
+            GL_FALSE,
+            glm::value_ptr(view)
+        );
+
+        glUniformMatrix4fv(
+            glGetUniformLocation(
+                program,
+                "model"
+            ),
+            1,
+            GL_FALSE,
+            glm::value_ptr(model)
+        );
+
+        if (mesh.vao != 0 &&
+            mesh.index_count > 0)
+        {
+            glBindVertexArray(mesh.vao);
+
+            glDrawElements(
+                GL_TRIANGLES,
+                static_cast<GLsizei>(
+                    mesh.index_count
+                ),
+                GL_UNSIGNED_INT,
+                nullptr
+            );
+
+            glBindVertexArray(0);
+        }
+
+        SDL_GL_SwapWindow(window);
     }
 
-    if (state->ebo != 0) {
-        glDeleteBuffers(1, &state->ebo);
+    if (mesh.vao != 0)
+    {
+        glDeleteVertexArrays(
+            1,
+            &mesh.vao
+        );
     }
 
-    if (state->vbo != 0) {
-        glDeleteBuffers(1, &state->vbo);
+    if (mesh.vbo != 0)
+    {
+        glDeleteBuffers(
+            1,
+            &mesh.vbo
+        );
     }
 
-    if (state->vao != 0) {
-        glDeleteVertexArrays(1, &state->vao);
+    if (mesh.ebo != 0)
+    {
+        glDeleteBuffers(
+            1,
+            &mesh.ebo
+        );
     }
 
-    if (state->program != 0) {
-        glDeleteProgram(state->program);
-    }
+    glDeleteProgram(program);
 
-    if (state->gl_context) {
-        SDL_GL_DestroyContext(
-            state->gl_context);
-    }
-
-    if (state->window) {
-        SDL_DestroyWindow(
-            state->window);
-    }
-
-    delete state;
-
+    SDL_GL_DestroyContext(context);
+    SDL_DestroyWindow(window);
     SDL_Quit();
+
+    return 0;
 }
