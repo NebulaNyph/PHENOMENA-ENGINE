@@ -33,6 +33,12 @@ CPMAddPackage(
     GIT_TAG 1.0.1
 )
 
+CPMAddPackage(
+    NAME tinygltf
+    GITHUB_REPOSITORY syoyo/tinygltf
+    GIT_TAG v2.9.7
+)
+
 find_package(SDL3 CONFIG REQUIRED)
 
 find_package(warnings CONFIG REQUIRED)
