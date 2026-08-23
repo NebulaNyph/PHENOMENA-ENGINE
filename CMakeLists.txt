@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.31)
 
 project(
-    cxx_project
+    PHENOMENA
     VERSION 1.0.0
-    DESCRIPTION "PHENOMENA"
+    DESCRIPTION "PHENOMENA 3D Engine"
     LANGUAGES C CXX
 )
 
@@ -30,7 +30,7 @@ find_package(cpm CONFIG REQUIRED)
 CPMAddPackage(
     NAME glm
     GITHUB_REPOSITORY g-truc/glm
-    VERSION 1.0.1
+    GIT_TAG 1.0.1
 )
 
 find_package(SDL3 CONFIG REQUIRED)
