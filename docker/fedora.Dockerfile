@@ -8,7 +8,7 @@
 #     cmake --workflow --preset=gcc-full
 
 # Pin the current stable. Dependabot / Renovate bump this tag.
-FROM fedora:44
+FROM fedora:45
 
 ARG SOURCE=""
 
